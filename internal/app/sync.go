@@ -85,58 +85,68 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 
 		switch v := evt.(type) {
 		case *events.Message:
-			pm := wa.ParseLiveMessage(v)
-			if pm.ReactionToID != "" && pm.ReactionEmoji == "" && v.Message != nil && v.Message.GetEncReactionMessage() != nil {
-				if reaction, err := a.wa.DecryptReaction(ctx, v); err == nil && reaction != nil {
-					pm.ReactionEmoji = reaction.GetText()
-					if pm.ReactionToID == "" {
-						if key := reaction.GetKey(); key != nil {
-							pm.ReactionToID = key.GetID()
+			if chatJID, msgID, isRevoke := wa.RevokeInfo(v); isRevoke {
+				if err := a.db.MarkRevoked(chatJID, msgID); err == nil {
+					messagesStored.Add(1)
+				}
+			} else if editPM, isEdit := wa.ParseEditEvent(v); isEdit {
+				if err := a.storeParsedMessage(ctx, editPM); err == nil {
+					messagesStored.Add(1)
+				}
+			} else {
+				pm := wa.ParseLiveMessage(v)
+				if pm.ReactionToID != "" && pm.ReactionEmoji == "" && v.Message != nil && v.Message.GetEncReactionMessage() != nil {
+					if reaction, err := a.wa.DecryptReaction(ctx, v); err == nil && reaction != nil {
+						pm.ReactionEmoji = reaction.GetText()
+						if pm.ReactionToID == "" {
+							if key := reaction.GetKey(); key != nil {
+								pm.ReactionToID = key.GetID()
+							}
 						}
 					}
 				}
-			}
-			if err := a.storeParsedMessage(ctx, pm); err == nil {
-				messagesStored.Add(1)
-			}
-			if a.events.Enabled() {
-				data := map[string]interface{}{
-					"id":        pm.ID,
-					"chat":      pm.Chat.String(),
-					"sender":    pm.SenderJID,
-					"timestamp": pm.Timestamp.Unix(),
-					"from_me":   pm.FromMe,
-					"is_group":  pm.Chat.Server == types.GroupServer,
+				if err := a.storeParsedMessage(ctx, pm); err == nil {
+					messagesStored.Add(1)
 				}
-				if pm.PushName != "" {
-					data["push_name"] = pm.PushName
-				}
-				if pm.Text != "" {
-					data["text"] = pm.Text
-				}
-				if pm.Media != nil {
-					data["media_type"] = pm.Media.Type
-					if pm.Media.Caption != "" {
-						data["caption"] = pm.Media.Caption
+				if a.events.Enabled() {
+					data := map[string]interface{}{
+						"id":        pm.ID,
+						"chat":      pm.Chat.String(),
+						"sender":    pm.SenderJID,
+						"timestamp": pm.Timestamp.Unix(),
+						"from_me":   pm.FromMe,
+						"is_group":  pm.Chat.Server == types.GroupServer,
 					}
-					if pm.Media.MimeType != "" {
-						data["mime_type"] = pm.Media.MimeType
+					if pm.PushName != "" {
+						data["push_name"] = pm.PushName
 					}
-					if pm.Media.Filename != "" {
-						data["filename"] = pm.Media.Filename
+					if pm.Text != "" {
+						data["text"] = pm.Text
 					}
+					if pm.Media != nil {
+						data["media_type"] = pm.Media.Type
+						if pm.Media.Caption != "" {
+							data["caption"] = pm.Media.Caption
+						}
+						if pm.Media.MimeType != "" {
+							data["mime_type"] = pm.Media.MimeType
+						}
+						if pm.Media.Filename != "" {
+							data["filename"] = pm.Media.Filename
+						}
+					}
+					if pm.ReactionEmoji != "" {
+						data["reaction_emoji"] = pm.ReactionEmoji
+						data["reaction_to_id"] = pm.ReactionToID
+					}
+					if pm.ReplyToID != "" {
+						data["reply_to_id"] = pm.ReplyToID
+					}
+					a.events.Emit("new_message", data)
 				}
-				if pm.ReactionEmoji != "" {
-					data["reaction_emoji"] = pm.ReactionEmoji
-					data["reaction_to_id"] = pm.ReactionToID
+				if opts.DownloadMedia && pm.Media != nil && pm.ID != "" {
+					enqueueMedia(pm.Chat.String(), pm.ID)
 				}
-				if pm.ReplyToID != "" {
-					data["reply_to_id"] = pm.ReplyToID
-				}
-				a.events.Emit("new_message", data)
-			}
-			if opts.DownloadMedia && pm.Media != nil && pm.ID != "" {
-				enqueueMedia(pm.Chat.String(), pm.ID)
 			}
 			if messagesStored.Load()%25 == 0 {
 				n := messagesStored.Load()

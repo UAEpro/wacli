@@ -23,6 +23,7 @@ var schemaMigrations = []migration{
 	{version: 3, name: "messages fts", up: migrateMessagesFTS},
 	{version: 4, name: "messages reaction columns", up: migrateMessagesReaction},
 	{version: 5, name: "groups is_member column", up: migrateGroupsIsMember},
+	{version: 6, name: "messages revoked column", up: migrateMessagesRevoked},
 }
 
 func (d *DB) ensureSchema() error {
@@ -168,6 +169,20 @@ func migrateMessagesDisplayText(d *DB) error {
 	}
 	if _, err := d.sql.Exec(`ALTER TABLE messages ADD COLUMN display_text TEXT`); err != nil {
 		return fmt.Errorf("add display_text column: %w", err)
+	}
+	return nil
+}
+
+func migrateMessagesRevoked(d *DB) error {
+	hasRevoked, err := d.tableHasColumn("messages", "revoked")
+	if err != nil {
+		return err
+	}
+	if hasRevoked {
+		return nil
+	}
+	if _, err := d.sql.Exec(`ALTER TABLE messages ADD COLUMN revoked INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("add revoked column: %w", err)
 	}
 	return nil
 }

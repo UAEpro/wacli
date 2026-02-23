@@ -58,6 +58,7 @@ type Message struct {
 	DisplayText string
 	MediaType   string
 	Snippet     string
+	Revoked     bool
 }
 
 type MessageInfo struct {
