@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/steipete/wacli/internal/out"
 	"github.com/steipete/wacli/internal/store"
 	"github.com/steipete/wacli/internal/wa"
 	"go.mau.fi/whatsmeow"
@@ -53,6 +54,7 @@ type Options struct {
 	StoreDir      string
 	Version       string
 	JSON          bool
+	Events        *out.EventWriter
 	AllowUnauthed bool
 }
 
@@ -60,6 +62,7 @@ type App struct {
 	opts   Options
 	waOnce sync.Once
 	waErr  error
+	events *out.EventWriter
 	wa     WAClient
 	db     *store.DB
 }
@@ -79,7 +82,12 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 
-	return &App{opts: opts, db: db}, nil
+	ev := opts.Events
+	if ev == nil {
+		ev = out.NewEventWriter(os.Stderr, false)
+	}
+
+	return &App{opts: opts, events: ev, db: db}, nil
 }
 
 func (a *App) OpenWA() error {
@@ -116,11 +124,12 @@ func (a *App) EnsureAuthed() error {
 	return fmt.Errorf("not authenticated; run `wacli auth`")
 }
 
-func (a *App) WA() WAClient        { return a.wa }
-func (a *App) DB() *store.DB       { return a.db }
-func (a *App) StoreDir() string    { return a.opts.StoreDir }
-func (a *App) Version() string     { return a.opts.Version }
-func (a *App) AllowUnauthed() bool { return a.opts.AllowUnauthed }
+func (a *App) WA() WAClient             { return a.wa }
+func (a *App) DB() *store.DB            { return a.db }
+func (a *App) Events() *out.EventWriter { return a.events }
+func (a *App) StoreDir() string         { return a.opts.StoreDir }
+func (a *App) Version() string          { return a.opts.Version }
+func (a *App) AllowUnauthed() bool      { return a.opts.AllowUnauthed }
 
 func (a *App) Connect(ctx context.Context, allowQR bool, qrWriter func(string)) error {
 	if err := a.OpenWA(); err != nil {
