@@ -23,6 +23,20 @@ type Options struct {
 	StorePath string
 }
 
+// Client wraps a whatsmeow.Client behind a mutex for safe concurrent access.
+//
+// IMPORTANT: All public methods use the pattern:
+//
+//	c.mu.Lock()
+//	cli := c.client
+//	c.mu.Unlock()
+//	// ... use cli WITHOUT holding the lock ...
+//
+// This is intentional — do NOT change to "defer c.mu.Unlock()".
+// whatsmeow fires event handlers synchronously during long-running calls
+// (e.g. SendMessage, ConnectContext). If we held mu during those calls, the
+// event handler would deadlock trying to re-acquire mu.
+// See locking_regression_test.go for automated enforcement.
 type Client struct {
 	opts Options
 
@@ -122,6 +136,9 @@ func (c *Client) Connect(ctx context.Context, opts ConnectOptions) error {
 	}
 
 	if authed {
+		// Mark as unavailable so the phone still gets notifications
+		// and the user doesn't appear "online" 24/7 to contacts.
+		_ = cli.SendPresence(ctx, types.PresenceUnavailable)
 		return nil
 	}
 
@@ -270,6 +287,62 @@ func (c *Client) EditMessage(ctx context.Context, chat types.JID, msgID types.Me
 	}
 	return resp.ID, nil
 }
+
+// SendReaction sends a reaction emoji to a specific message. Pass an empty
+// emoji string to remove a previously sent reaction.
+func (c *Client) SendReaction(ctx context.Context, chat types.JID, targetMsgID types.MessageID, emoji string) error {
+	c.mu.Lock()
+	cli := c.client
+	c.mu.Unlock()
+	if cli == nil || !cli.IsConnected() {
+		return fmt.Errorf("not connected")
+	}
+	msg := &waProto.Message{
+		ReactionMessage: &waProto.ReactionMessage{
+			Key: &waProto.MessageKey{
+				RemoteJID: strPtr(chat.String()),
+				ID:        strPtr(string(targetMsgID)),
+				FromMe:    boolPtr(true),
+			},
+			Text:              strPtr(emoji),
+			SenderTimestampMS: int64Ptr(time.Now().UnixMilli()),
+		},
+	}
+	_, err := cli.SendMessage(ctx, chat, msg)
+	return err
+}
+
+// SendLocation sends a location message with latitude, longitude, and optional
+// name and address.
+func (c *Client) SendLocation(ctx context.Context, to types.JID, lat, lng float64, name, address string) (types.MessageID, error) {
+	c.mu.Lock()
+	cli := c.client
+	c.mu.Unlock()
+	if cli == nil || !cli.IsConnected() {
+		return "", fmt.Errorf("not connected")
+	}
+	msg := &waProto.Message{
+		LocationMessage: &waProto.LocationMessage{
+			DegreesLatitude:  &lat,
+			DegreesLongitude: &lng,
+		},
+	}
+	if name != "" {
+		msg.LocationMessage.Name = &name
+	}
+	if address != "" {
+		msg.LocationMessage.Address = &address
+	}
+	resp, err := cli.SendMessage(ctx, to, msg)
+	if err != nil {
+		return "", err
+	}
+	return resp.ID, nil
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+func int64Ptr(i int64) *int64 { return &i }
 
 func (c *Client) Upload(ctx context.Context, data []byte, mediaType whatsmeow.MediaType) (whatsmeow.UploadResponse, error) {
 	c.mu.Lock()
