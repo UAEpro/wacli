@@ -204,7 +204,11 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 		case *events.Connected:
 			// Mark as unavailable so the user doesn't appear "online" 24/7
 			// and the phone keeps receiving push notifications.
-			_ = a.wa.SendPresence(ctx, types.PresenceUnavailable)
+			if err := a.wa.SendPresence(ctx, types.PresenceUnavailable); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to set presence unavailable: %v\n", err)
+			} else {
+				fmt.Fprintln(os.Stderr, "Presence set to unavailable.")
+			}
 			if a.events.Enabled() {
 				a.events.Emit("connected", nil)
 			} else {
